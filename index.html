@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="theme-color" content="#04050f" />
+<title>Merry Kris S</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Mountains+of+Christmas:wght@700&display=swap" rel="stylesheet" />
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #04050f; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas id="c" role="img" aria-label="Sapin de Noël en ASCII sous la neige, avec une lune portant le message Merry Kris S"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  const MONO = 'ui-monospace, Menlo, Consolas, "Courier New", monospace';
+  const SCRIPT = '"Mountains of Christmas", "Comic Sans MS", cursive';
+  const LIGHTS = ['#ff3b3b', '#ffc93c', '#3fa9ff', '#ff6fd8', '#45f0d6', '#b388ff', '#9dff57', '#ffffff'];
+  const GREENS = ['#1c6b38', '#248a47', '#2fa656', '#3fbf66', '#58d47c'];
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function rng(seed) {
+    return () => {
+      seed = (seed + 0x6D2B79F5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  const pick = (r, a) => a[Math.floor(r() * a.length)];
+
+  // ---------- Tree model (grid of cells, col 0 = axis) ----------
+  const grid = new Map();
+  const set = (row, col, c) => grid.set(row + ',' + col, Object.assign({ row, col, phase: 0, speed: 1 }, c));
+  const r = rng(20251225);
+
+  [[0, -2, '\\'], [0, 0, '|'], [0, 2, '/'],
+   [1, -3, '-'], [1, -2, '-'], [1, 2, '-'], [1, 3, '-'],
+   [2, -2, '/'], [2, 0, '|'], [2, 2, '\\']].forEach(([row, col, ch]) => set(row, col, { ch, kind: 'ray', phase: Math.abs(col) + row }));
+  set(1, 0, { ch: '★', kind: 'star' });
+
+  const TIERS = [[4, 1], [5, 3], [6, 5], [7, 7], [8, 9]];
+  let row = 3;
+  TIERS.forEach(([rows, base]) => {
+    for (let j = 0; j < rows; j++, row++) {
+      const h = base + j, last = j === rows - 1, garland = j === rows - 2;
+      for (let col = -h; col <= h; col++) {
+        if (col === -h || col === h) { set(row, col, { ch: col < 0 ? '/' : '\\', kind: 'leaf', color: '#6fe08f' }); continue; }
+        if (last) { set(row, col, { ch: (col + h) % 2 ? '_' : 'v', kind: 'leaf', color: '#1b5e33' }); continue; }
+        if (garland && (col + h) % 2 === 0) { set(row, col, { ch: '~', kind: 'garland' }); continue; }
+        if (r() < 0.085) { set(row, col, { ch: r() < 0.2 ? '@' : 'o', kind: 'light', ci: Math.floor(r() * LIGHTS.length), phase: r() * 6.283, speed: 0.6 + r() * 1.2 }); continue; }
+        const q = r();
+        set(row, col, { ch: q < 0.55 ? '*' : q < 0.8 ? '^' : q < 0.9 ? '+' : q < 0.96 ? '"' : '~', kind: 'leaf', color: pick(r, GREENS) });
+      }
+    }
+  });
+
+  for (let j = 0; j < 4; j++, row++)
+    for (let col = -3; col <= 3; col++) {
+      const edge = Math.abs(col) === 3;
+      set(row, col, { ch: edge ? '|' : (col + j) % 2 ? ':' : '|', kind: 'trunk', color: edge ? '#9a6a35' : '#6b421c' });
+    }
+  const giftBottom = row;
+  const TOTAL_ROWS = row + 1;
+
+  [[-13, 7, 3, '#ff4d6d', '#ffd166'], [-6, 5, 2, '#4dc3ff', '#ffffff'],
+   [2, 5, 3, '#b388ff', '#ffd166'], [7, 7, 2, '#9dff57', '#ff4d6d']].forEach(([c0, w, h, box, rib]) => {
+    const mid = c0 + (w >> 1), top = giftBottom - h + 1;
+    set(top - 1, mid - 1, { ch: '_', kind: 'gift', color: box });
+    set(top - 1, mid, { ch: '*', kind: 'bow', color: rib });
+    set(top - 1, mid + 1, { ch: '_', kind: 'gift', color: box });
+    for (let rr = top; rr <= giftBottom; rr++)
+      for (let cc = c0; cc < c0 + w; cc++) {
+        const edge = cc === c0 || cc === c0 + w - 1;
+        set(rr, cc, { ch: edge || cc === mid ? '|' : '_', kind: 'gift', color: cc === mid ? rib : box });
+      }
+  });
+
+  const cells = [...grid.values()];
+  const plain = cells.filter(c => c.kind === 'leaf' || c.kind === 'trunk' || c.kind === 'gift');
+  const glowCells = cells.filter(c => c.kind === 'light' || c.kind === 'garland' || c.kind === 'ray' || c.kind === 'bow');
+  const starCell = cells.find(c => c.kind === 'star');
+  const leafCells = cells.filter(c => c.kind === 'leaf' && c.ch !== '/' && c.ch !== '\\');
+  const COLS = 33;
+
+  // ---------- Sprites (glow baked once, then cheap drawImage) ----------
+  const spriteCache = new Map();
+  function offscreen(w, h) {
+    const c = document.createElement('canvas');
+    c.width = Math.ceil(w * DPR); c.height = Math.ceil(h * DPR);
+    const g = c.getContext('2d'); g.scale(DPR, DPR);
+    return [c, g];
+  }
+  function glyph(ch, color, size, glow) {
+    const key = 'g|' + ch + '|' + color + '|' + size + '|' + glow;
+    let s = spriteCache.get(key);
+    if (s) return s;
+    const S = Math.ceil(size * 1.8 + glow * 3);
+    const [c, g] = offscreen(S, S);
+    g.font = `700 ${size}px ${MONO}`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = color;
+    if (glow) { g.shadowColor = color; g.shadowBlur = glow; g.fillText(ch, S / 2, S / 2); g.fillText(ch, S / 2, S / 2); g.shadowBlur = 0; }
+    g.fillText(ch, S / 2, S / 2);
+    spriteCache.set(key, s = { c, S });
+    return s;
+  }
+  function halo(rgb, alpha, R) {
+    const key = 'h|' + rgb + '|' + alpha + '|' + R;
+    let s = spriteCache.get(key);
+    if (s) return s;
+    const S = R * 2;
+    const [c, g] = offscreen(S, S);
+    const grad = g.createRadialGradient(R, R, 0, R, R, R);
+    grad.addColorStop(0, `rgba(${rgb},${alpha})`); grad.addColorStop(0.45, `rgba(${rgb},${alpha * 0.35})`); grad.addColorStop(1, `rgba(${rgb},0)`);
+    g.fillStyle = grad; g.fillRect(0, 0, S, S);
+    spriteCache.set(key, s = { c, S });
+    return s;
+  }
+  const blit = (s, x, y, scale = 1) => { const w = s.S * scale; ctx.drawImage(s.c, x - w / 2, y - w / 2, w, w); };
+
+  // ---------- Layout & static layers ----------
+  let W, H, DPR, fs, cellW, cellH, cx, baseY, treeTopY, treeH, moonX, moonY, moonR;
+  let bgCanvas, treeCanvas, treeW, treeTH, moonCanvas, groundCanvas, groundHgt, auroraCanvas, auroraCtx;
+  let stars = [], groundSparks = [], flakes = [[], [], []];
+  const AURORA_SCALE = 0.25;
+
+  const groundH = () => Math.max(48, H * 0.09);
+  const groundTop = x => H - groundH() * (0.55 + 0.45 * Math.sin(Math.PI * x / W)) - 8 * Math.sin(x * 0.02);
+  const rowY = row => baseY - (TOTAL_ROWS - 1 - row) * cellH;
+  const cellX = (c, sway) => cx + c.col * cellW + sway * (TOTAL_ROWS - 1 - c.row) / (TOTAL_ROWS - 1);
+
+  function buildBackground() {
+    const [c, g] = offscreen(W, H);
+    const sky = g.createLinearGradient(0, 0, 0, H);
+    sky.addColorStop(0, '#03040c'); sky.addColorStop(0.55, '#0a0f2a'); sky.addColorStop(1, '#1b1446');
+    g.fillStyle = sky; g.fillRect(0, 0, W, H);
+    const midY = (treeTopY + baseY) / 2, halfW = 16 * cellW;
+    g.globalCompositeOperation = 'screen';
+    const tg = g.createRadialGradient(cx, midY, 0, cx, midY, halfW * 1.7);
+    tg.addColorStop(0, 'rgba(60,200,110,0.20)'); tg.addColorStop(1, 'rgba(60,200,110,0)');
+    g.fillStyle = tg; g.fillRect(0, 0, W, H);
+    g.globalCompositeOperation = 'source-over';
+    const v = g.createRadialGradient(cx, H * 0.5, Math.min(W, H) * 0.35, cx, H * 0.5, Math.max(W, H) * 0.8);
+    v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,0.55)');
+    g.fillStyle = v; g.fillRect(0, 0, W, H);
+    bgCanvas = c;
+  }
+
+  function buildTree() {
+    treeW = (COLS + 4) * cellW; treeTH = TOTAL_ROWS * cellH + fs * 2;
+    const [c, g] = offscreen(treeW, treeTH);
+    g.font = `700 ${fs * 1.12}px ${MONO}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+    for (const cell of plain) {
+      g.fillStyle = cell.color;
+      g.fillText(cell.ch, treeW / 2 + cell.col * cellW, fs + cell.row * cellH);
+    }
+    treeCanvas = c;
+  }
+
+  function buildMoon() {
+    const rr = moonR, S = rr * 2 + 4, x = S / 2, y = S / 2;
+    const [c, g] = offscreen(S, S);
+    const b = g.createRadialGradient(x - rr * 0.35, y - rr * 0.35, rr * 0.1, x, y, rr);
+    b.addColorStop(0, '#fffbe8'); b.addColorStop(0.6, '#f7e8b5'); b.addColorStop(1, '#d3ba76');
+    g.fillStyle = b; g.beginPath(); g.arc(x, y, rr, 0, 7); g.fill();
+    g.fillStyle = 'rgba(120,95,40,0.10)';
+    [[0.5, -0.4, 0.15], [-0.55, 0.3, 0.11], [0.25, 0.6, 0.08], [-0.15, -0.62, 0.07], [0.62, 0.22, 0.06]].forEach(([dx, dy, k]) => { g.beginPath(); g.arc(x + dx * rr, y + dy * rr, k * rr, 0, 7); g.fill(); });
+    g.fillStyle = '#4a3310'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.font = `700 ${rr * 0.44}px ${SCRIPT}`;
+    g.fillText('Merry', x, y - rr * 0.24);
+    g.fillText('Kris S', x, y + rr * 0.26);
+    moonCanvas = c;
+  }
+
+  function buildGround() {
+    groundHgt = groundH() + 30;
+    const [c, g] = offscreen(W, groundHgt);
+    g.translate(0, -(H - groundHgt));
+    const grad = g.createLinearGradient(0, H - groundH() - 10, 0, H);
+    grad.addColorStop(0, '#ffffff'); grad.addColorStop(1, '#cfdcff');
+    g.fillStyle = grad;
+    g.beginPath(); g.moveTo(0, H);
+    for (let x = 0; x <= W + 16; x += 16) g.lineTo(x, groundTop(x));
+    g.lineTo(W, H); g.closePath(); g.fill();
+    groundCanvas = c;
+  }
+
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 1.5);
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = W * DPR; canvas.height = H * DPR;
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    spriteCache.clear();
+
+    fs = Math.max(6, Math.min(30, (H * 0.78) / TOTAL_ROWS, (W * 0.94) / (COLS * 0.62)));
+    ctx.font = `700 ${fs}px ${MONO}`;
+    cellW = ctx.measureText('M').width;
+    cellH = fs * 1.02;
+    cx = W / 2;
+    baseY = groundTop(cx) - cellH * 0.45;
+    treeTopY = baseY - (TOTAL_ROWS - 1) * cellH;
+    treeH = baseY - treeTopY;
+
+    moonR = Math.max(52, Math.min(W, H) * 0.11);
+    moonX = W - moonR * 1.7 - 12;
+    moonY = moonR * 1.6 + 12;
+
+    buildBackground(); buildTree(); buildMoon(); buildGround();
+    auroraCanvas = document.createElement('canvas');
+    auroraCanvas.width = Math.ceil(W * AURORA_SCALE); auroraCanvas.height = Math.ceil(H * 0.5 * AURORA_SCALE);
+    auroraCtx = auroraCanvas.getContext('2d');
+    auroraCtx.setTransform(AURORA_SCALE, 0, 0, AURORA_SCALE, 0, 0);
+
+    stars = Array.from({ length: 150 }, () => ({ x: Math.random() * W, y: Math.random() * H * 0.75, s: 0.6 + Math.random() * 1.6, ph: Math.random() * 6.283, w: 0.8 + Math.random() * 2.2 }));
+    groundSparks = Array.from({ length: 40 }, () => { const x = Math.random() * W; return { x, y: groundTop(x) + 4 + Math.random() * (groundH() * 0.6), ph: Math.random() * 6.283 }; });
+
+    const n = Math.round(Math.max(200, Math.min(450, (W * H) / 3200)) / (reduced ? 3 : 1));
+    flakes = [[], [], []];
+    for (let i = 0; i < n; i++) { const f = makeFlake(true); flakes[f.layer].push(f); }
+  }
+
+  const FLAKE_CH = [['·', '.', '*'], ['*', '✦', '•'], ['❄', '✱', '*']];
+  const FLAKE_SIZE = () => [fs * 0.6, fs * 0.9, fs * 1.4];
+  function makeFlake(init) {
+    const q = Math.random(), layer = q < 0.45 ? 0 : q < 0.8 ? 1 : 2;
+    return {
+      layer, x: Math.random() * W, y: init ? Math.random() * H : -30,
+      k: 0.8 + Math.random() * 0.5,
+      vy: [26, 52, 92][layer] * (0.8 + Math.random() * 0.5),
+      ph: Math.random() * 6.283,
+      ci: Math.floor(Math.random() * 3)
+    };
+  }
+
+  // ---------- Dynamic drawing ----------
+  function aurora(t) {
+    const g = auroraCtx;
+    g.clearRect(0, 0, W, H * 0.5);
+    const cols = ['60,220,140', '120,90,255', '40,180,220'];
+    for (let i = 0; i < 3; i++) {
+      const y0 = H * (0.10 + 0.09 * i) + Math.sin(t * 0.15 + i) * H * 0.03, th = H * 0.11;
+      const grad = g.createLinearGradient(0, y0 - th, 0, y0 + th);
+      const a = 0.14 + 0.05 * Math.sin(t * 0.3 + i * 2);
+      grad.addColorStop(0, `rgba(${cols[i]},0)`); grad.addColorStop(0.5, `rgba(${cols[i]},${a})`); grad.addColorStop(1, `rgba(${cols[i]},0)`);
+      g.fillStyle = grad;
+      const b1 = H * 0.07 * Math.sin(t * 0.2 + i), b2 = H * 0.07 * Math.cos(t * 0.17 + i * 1.3);
+      g.beginPath();
+      g.moveTo(0, y0 - th);
+      g.bezierCurveTo(W * 0.3, y0 - th + b1, W * 0.7, y0 - th + b2, W, y0 - th);
+      g.lineTo(W, y0 + th);
+      g.bezierCurveTo(W * 0.7, y0 + th + b2, W * 0.3, y0 + th + b1, 0, y0 + th);
+      g.closePath(); g.fill();
+    }
+    ctx.globalCompositeOperation = 'screen';
+    ctx.drawImage(auroraCanvas, 0, 0, W, H * 0.5);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  let shoot = null, nextShoot = 3;
+  function shootingStar(t, dt) {
+    if (!shoot && t > nextShoot) shoot = { x: Math.random() * W * 0.6, y: Math.random() * H * 0.3, vx: W * 0.9, vy: H * 0.35, life: 0 };
+    if (!shoot) return;
+    shoot.life += dt;
+    const p = shoot.life / 0.9;
+    if (p > 1) { shoot = null; nextShoot = t + 7 + Math.random() * 10; return; }
+    const x = shoot.x + shoot.vx * shoot.life, y = shoot.y + shoot.vy * shoot.life;
+    const tx = x - shoot.vx * 0.16, ty = y - shoot.vy * 0.16;
+    const g = ctx.createLinearGradient(x, y, tx, ty);
+    g.addColorStop(0, `rgba(255,255,255,${1 - p})`); g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.strokeStyle = g; ctx.lineWidth = 2; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(tx, ty); ctx.stroke();
+  }
+
+  function drawFlakes(layer, dt, t, wind) {
+    const list = flakes[layer], size = FLAKE_SIZE()[layer];
+    const sprites = FLAKE_CH[layer].map(ch => glyph(ch, '#ffffff', size, layer === 2 ? fs * 0.5 : 0));
+    ctx.globalAlpha = [0.4, 0.7, 0.95][layer];
+    const wx = wind * (0.4 + layer * 0.35);
+    for (const f of list) {
+      f.y += f.vy * dt;
+      f.x += (wx + Math.sin(t * 1.3 + f.ph) * 14) * dt;
+      if (f.y > H + 30) { f.y = -30; f.x = Math.random() * W; }
+      if (f.x > W + 30) f.x = -30; else if (f.x < -30) f.x = W + 30;
+      blit(sprites[f.ci], f.x, f.y, f.k);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  const sparkles = [];
+  function tree(t, dt) {
+    const sway = Math.sin(t * 0.6) * cellW * 0.35;
+
+    ctx.save();
+    ctx.translate(0, baseY); ctx.transform(1, 0, -sway / treeH, 1, 0, 0); ctx.translate(0, -baseY);
+    ctx.drawImage(treeCanvas, cx - treeW / 2, treeTopY - fs, treeW, treeTH);
+    ctx.restore();
+
+    const sx = cellX(starCell, sway), sy = rowY(starCell.row), pulse = 0.5 + 0.5 * Math.sin(t * 2.2);
+    ctx.globalCompositeOperation = 'screen';
+    blit(halo('255,220,120', 0.6, fs * 7), sx, sy, 0.75 + 0.25 * pulse);
+    ctx.globalCompositeOperation = 'source-over';
+
+    for (const c of glowCells) {
+      const x = cellX(c, sway), y = rowY(c.row);
+      let s, a;
+      if (c.kind === 'light') {
+        s = glyph(c.ch, LIGHTS[(c.ci + Math.floor(t * 0.35 + c.row * 0.12)) % LIGHTS.length], fs, fs * 1.1);
+        a = 0.55 + 0.45 * Math.sin(t * c.speed * 2.2 + c.phase);
+      } else if (c.kind === 'garland') {
+        s = glyph('~', '#ffd166', fs, fs * 0.9);
+        a = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(t * 5 - c.col * 0.55 - c.row * 0.3));
+      } else if (c.kind === 'ray') {
+        s = glyph(c.ch, '#ffe08a', fs, fs * 0.8);
+        a = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(t * 3 - c.phase * 0.8));
+      } else {
+        s = glyph('*', c.color, fs, fs * 0.8);
+        a = 0.8 + 0.2 * Math.sin(t * 3 + c.col);
+      }
+      ctx.globalAlpha = a;
+      blit(s, x, y);
+    }
+    ctx.globalAlpha = 1;
+
+    ctx.save();
+    ctx.translate(sx, sy); ctx.rotate(Math.sin(t * 1.1) * 0.12);
+    blit(glyph('★', '#ffe066', fs * 2.1, fs * 1.6), 0, 0, 0.9 + 0.15 * pulse);
+    ctx.restore();
+
+    if (Math.random() < dt * 6) sparkles.push({ c: leafCells[Math.floor(Math.random() * leafCells.length)], life: 0 });
+    const sp = glyph('+', '#ffffff', fs * 1.2, fs);
+    for (let i = sparkles.length - 1; i >= 0; i--) {
+      const s = sparkles[i]; s.life += dt;
+      const p = s.life / 0.7;
+      if (p >= 1) { sparkles.splice(i, 1); continue; }
+      ctx.globalAlpha = Math.sin(p * Math.PI);
+      blit(sp, cellX(s.c, sway), rowY(s.c.row));
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ---------- Main loop ----------
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    const t = now / 1000;
+    const wind = 18 * Math.sin(t * 0.13) + 8 * Math.sin(t * 0.37);
+
+    ctx.drawImage(bgCanvas, 0, 0, W, H);
+    aurora(t);
+
+    ctx.fillStyle = '#fff';
+    for (const s of stars) {
+      ctx.globalAlpha = 0.35 + 0.65 * Math.pow(Math.sin(t * s.w + s.ph), 2);
+      ctx.fillRect(s.x, s.y, s.s, s.s);
+    }
+    ctx.globalAlpha = 1;
+    shootingStar(t, dt);
+
+    ctx.globalAlpha = 0.85 + 0.15 * Math.sin(t * 0.8);
+    blit(halo('255,240,190', 0.32, moonR * 2.3), moonX, moonY);
+    ctx.globalAlpha = 1;
+    ctx.drawImage(moonCanvas, moonX - moonR - 2, moonY - moonR - 2, moonR * 2 + 4, moonR * 2 + 4);
+
+    drawFlakes(0, dt, t, wind);
+
+    ctx.drawImage(groundCanvas, 0, H - groundHgt, W, groundHgt);
+    ctx.fillStyle = '#fff';
+    for (const s of groundSparks) {
+      const a = Math.sin(t * 2 + s.ph);
+      if (a < 0.6) continue;
+      ctx.globalAlpha = (a - 0.6) * 2.5;
+      ctx.fillRect(s.x, s.y, 2, 2);
+    }
+    ctx.globalAlpha = 1;
+
+    tree(t, dt);
+    drawFlakes(1, dt, t, wind);
+    drawFlakes(2, dt, t, wind);
+
+    requestAnimationFrame(frame);
+  }
+
+  let rt;
+  addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(resize, 120); });
+  if (document.fonts && document.fonts.load) document.fonts.load(`700 20px ${SCRIPT}`).then(() => moonR && buildMoon()).catch(() => {});
+  resize();
+  frame(performance.now());
+})();
+</script>
+</body>
+</html>
